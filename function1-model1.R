@@ -89,94 +89,99 @@ bmi.lavaan <- function(x, type = "metric", tolerance = .2, minBF = 3, fraction =
   #                      varG2,')* ','F')
   # get the group variable's name
   groupVariable <- lavInspect(x, what = "group")
+  n_groups <- length(lavInspect(x, what = "group.label"))
   # testing metric invariance
   # CJ: Make a separate function for metric invariance
   out <- switch(type,
-                "metric" = bmi_metric(...), # CJ: You still have to pass the correct arguments here
-                "scalar" = bmi_scalar(...)) # CJ: You still have to pass the correct arguments here
+                "metric" = bmi_metric(x = x,
+                                      dat = dat,
+                                      estiOut = estiOut,
+                                      indicatorName = indicatorName,
+                                      indicatorNum = indicatorNum,
+                                      indicatorSum = indicatorSum,
+                                      Equation = Equation,
+                                      groupVariable = groupVariable,
+                                      n_groups = n_groups), # CJ: You still have to pass the correct arguments here
+                "scalar" = bmi_scalar()) # CJ: You still have to pass the correct arguments here
   class(out) <- c("bayesian_invariance", class(out))
   return(out)
 }# end function
 
 # CJ: You still have to pass the correct arguments here
 bmi_metric <- function(...){
+
+  dots <- list(...)
+  attach(dots)
+  browser()
   #Part2: recreate the model in lavvan to align the loadings
   # get the original loadings
-  Nload <- estiOut[ estiOut$op == "=~", "est"]
   # get the loadings of group 1 and 2
-  loadG1 <- Nload[1:indicatorNum]
-  loadG2 <- Nload[(indicatorNum + 1):(2*indicatorNum)]
+  loadings <- get_loadings_by_group(x, n_groups = n_groups)
+
+
   # compute the factor's variance of group 1 and 2 that the product of loadings per group = 1
-  varG1 <- (prod(loadG1)**(1/indicatorNum))**2
-  varG2 <- (prod(loadG2)**(1/indicatorNum))**2
+  var_by_group <- apply(loadings, 2, function(i){
+    (prod(i)**(1/indicatorNum))**2
+  })
+
   # adjust the factor's variance of group 1 and 2
-  adjustFactor <- paste0('F', ' ~~ ' ,'c(',varG1,',',
-                         varG2,')* ','F')
+  adjustFactor <- paste0('F', ' ~~ ' ,'c(',var_by_group[1],',',
+                         var_by_group[2],')* ','F')
   # set model for lavaan
   Model <- c(Equation,adjustFactor)
   # run lavvan again
-  lavAdjusted <- cfa(Model, dat, std.lv = TRUE, group = groupVariable)
+  lavAdjusted <- cfa(model = Model, data = dat, std.lv = TRUE, group = groupVariable)
   #Part3: get the adjusted loadings, that is, comparable loadings
-  # get the adjusted estimates
-  estiAdjusted <- parameterEstimates(lavAdjusted)
   # get the adjusted loadings
-  AdjustedLoad <- estiAdjusted[estiAdjusted$op == "=~", "est"]
-  # get the adjusted loadings of group 1 and 2
-  AdjustedLoadG1 <- AdjustedLoad[1:indicatorNum]
-  AdjustedLoadG2 <- AdjustedLoad[(indicatorNum + 1):(2*indicatorNum)]
+  AdjustedLoad <- get_loadings_by_group(lavAdjusted, n_groups = n_groups)
+
   # get the posterior and prior means
-  meanPosterior <- AdjustedLoadG1 - AdjustedLoadG2
+  # CJ: What's the logic of doing group 1 minus group 2?
+  meanPosterior <- AdjustedLoad[, 1] - AdjustedLoad[, 2]
   meanPrior <- rep(0, indicatorNum)
   #Part4: get upper and lower bounds
   # get the covariance of the observed variables
   covx <- lavInspect(lavAdjusted, what = "cov.ov")
   # The max value of the loadings in group 1 and 2
-  loadMaxG1 <- sqrt(diag(matrix(unlist(covx[1]),nrow=indicatorNum))/varG1)
-  loadMaxG2 <- sqrt(diag(matrix(unlist(covx[2]),nrow=indicatorNum))/varG2)
-  # get the bound
-  loadMax <- 0
-  for(i in 1:indicatorNum){
-    if(loadMaxG1[i]>loadMaxG2[i]){
-      loadMax[i] <- a*loadMaxG2[i]
-
-    }else{
-      loadMax[i] <- a*loadMaxG1[i]
-    }
-  }
+  loadmax_grp <- sapply(seq_along(covx), function(i){
+    sqrt(diag(covx[[i]])/var_by_group[i])
+  })
   # the upper and lower bounds
-  upperBound <- unlist(loadMax)
-  lowerBound <- -upperBound
+  upperBound <- loadmax_grp[, 1]
+  upperBound[loadmax_grp[, 1] > loadmax_grp[, 2]] <- loadmax_grp[, 2][loadmax_grp[, 1] > loadmax_grp[, 2]]
+  upperBound <- tolerance * upperBound
+  lowerBound <- -1 * upperBound
   #Part5: get posterior and prior covariance
   # get covariance of group 1 and 2
   varName1 <- paste0('F', '=~' ,indicatorName)
   varName2 <- paste0('F', '=~' ,indicatorName,'.g2')
-  cov1 <- lavInspect(lavAdjusted, "vcov")[varName1, varName1]
-  cov2 <- lavInspect(lavAdjusted, "vcov")[varName2, varName2]
+  vcovmat <- lavInspect(lavAdjusted, "vcov")
+  cov1 <- vcovmat[varName1, varName1]
+  cov2 <- vcovmat[varName2, varName2]
   # get posterior covariance
   covariance <- as.matrix(bdiag(cov1,cov2))
   A1<- diag(indicatorNum)
-  A2<- diag(indicatorNum)*(-1)
+  A2<- -1 * diag(indicatorNum)
   A <- cbind(A1,A2)
-  covPosterior<- A%*%covariance%*%t(A)
+  browser()
+  # CJ: THis does not work for me (anymore)?
+  covPosterior<- A %*% covariance %*% t(A)
   # get sample size
   sampsizes <- lavInspect(lavAdjusted, what = "nobs")
   # fraction b
-  b <- times*(indicatorNum+1)/(2*sampsizes)
+  b <- fraction*(indicatorNum + 1)/(2 * sampsizes)
   # get the prior covariance
   covPrior1 <- cov1/b[1]
   covPrior2 <- cov2/b[2]
   covPrior <- as.matrix(bdiag(covPrior1,covPrior2))
   covPrior <- A%*%covPrior%*%t(A)
   ## compute Bayes factor
-  set.seed(seed)
+  # CJ: Never set seed inside the function, especially every time the same seed!!!
+  # set.seed(seed)
   BF <- (pmvnorm(lower=lowerBound, upper = upperBound, mean=meanPosterior, sigma=covPosterior)[1]*(1- pmvnorm(lower=lowerBound, upper = upperBound, mean=meanPrior, sigma=covPrior)[1]))/
     (pmvnorm(lower=lowerBound, upper = upperBound, mean=meanPrior, sigma=covPrior)[1]*(1- pmvnorm(lower=lowerBound, upper = upperBound, mean=meanPosterior, sigma=covPosterior)[1]))
-  BF <- as.data.frame(BF)
-  colnames(BF) <- 'metric'
-  rownames(BF) <- 'Bayes factor'
-  #BF <- round(BF,3)
-  BF1 <- unlist(BF)
-  if(is.nan(BF1)){
+  browser()
+  if(is.nan(BF)){
     cat('Approximate metric invariance : Bayes factor cannot be computed. \n\n')
     print(BF)
   }
@@ -565,6 +570,23 @@ get_lav_data <- function(x, ...){
   }
   dat
 }
+
+get_loadings_by_group <- function(x, n_groups){
+  loadings <- parameterEstimates(x)
+  loadings <- loadings[loadings$op == "=~", ]
+  labs <- do.call(paste0, loadings[c("lhs", "op", "rhs")])
+  loadings$labs <- labs
+  labs <- table(labs)
+  if(any(labs != n_groups)){
+    warning("Dropped loadings")
+    labs <- labs[labs == n_groups]
+  }
+  labs <- names(labs)
+  loadings <- loadings[loadings$labs %in% labs,]
+  loadings <- loadings[order(loadings$labs, loadings$group), ]
+  return(matrix(loadings$est, ncol = n_groups, byrow = TRUE))
+}
+
 
 # section 1: example
 # CFA model
