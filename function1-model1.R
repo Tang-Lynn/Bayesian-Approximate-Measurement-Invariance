@@ -101,17 +101,26 @@ bmi.lavaan <- function(x, type = "metric", tolerance = .2, minBF = 3, fraction =
                                       indicatorSum = indicatorSum,
                                       Equation = Equation,
                                       groupVariable = groupVariable,
-                                      n_groups = n_groups), # CJ: You still have to pass the correct arguments here
+                                      n_groups = n_groups,
+                                      fraction = fraction), # CJ: You still have to pass the correct arguments here
                 "scalar" = bmi_scalar()) # CJ: You still have to pass the correct arguments here
   class(out) <- c("bayesian_invariance", class(out))
   return(out)
 }# end function
 
 # CJ: You still have to pass the correct arguments here
-bmi_metric <- function(...){
+bmi_metric <- function(x,
+                       dat,
+                       estiOut,
+                       indicatorName,
+                       indicatorNum,
+                       indicatorSum,
+                       Equation,
+                       groupVariable,
+                       n_groups,
+                       fraction){
 
-  dots <- list(...)
-  attach(dots)
+
   browser()
   #Part2: recreate the model in lavvan to align the loadings
   # get the original loadings
@@ -164,7 +173,6 @@ bmi_metric <- function(...){
   A2<- -1 * diag(indicatorNum)
   A <- cbind(A1,A2)
   browser()
-  # CJ: THis does not work for me (anymore)?
   covPosterior<- A %*% covariance %*% t(A)
   # get sample size
   sampsizes <- lavInspect(lavAdjusted, what = "nobs")
@@ -181,14 +189,10 @@ bmi_metric <- function(...){
   BF <- (pmvnorm(lower=lowerBound, upper = upperBound, mean=meanPosterior, sigma=covPosterior)[1]*(1- pmvnorm(lower=lowerBound, upper = upperBound, mean=meanPrior, sigma=covPrior)[1]))/
     (pmvnorm(lower=lowerBound, upper = upperBound, mean=meanPrior, sigma=covPrior)[1]*(1- pmvnorm(lower=lowerBound, upper = upperBound, mean=meanPosterior, sigma=covPosterior)[1]))
   browser()
-  if(is.nan(BF)){
-    cat('Approximate metric invariance : Bayes factor cannot be computed. \n\n')
-    print(BF)
+  if(is.nan(BF)){ # SHould these be error messages instead?
+    stop('Approximate metric invariance : Bayes factor cannot be computed. \n\n')
   }
-  else if(BF >= minBF){
-    cat('When the minimum Bayes factor should  >=',minBF,',','approximate metric invariance is supported. \n\n')
-    print(BF)
-  } else {
+  if(BF < minBF){
     #Part6: compute BF for each pair of the loadings
     eachBF <- list()
     for(i in 1:indicatorNum){
@@ -219,7 +223,8 @@ bmi_metric <- function(...){
     partLoadG2 <- loadG2
     # Part7: compute partial BF. If patial BF always < minBF,
     #       the loop will stop with length(PartEachBF) == 1.
-    # CJ: WHile loops are risky. Make sure to set a maximum number of iterations
+    # CJ: WHile loops are risky. This should probably be a recursive function.
+
     while(partBF < minBF & length(PartEachBF) != 1){
       ## recompute model
       # get the partial loadings
@@ -299,7 +304,8 @@ bmi_metric <- function(...){
       # get the partial lower bound
       partLowerBound <- -partUpperBound
       ## compute partial BF
-      set.seed(seed)
+      # CJ: Here you set the same seed every time. The result is: no more random sampling
+      # set.seed(seed)
       partBF <- (pmvnorm(lower=partLowerBound, upper = partUpperBound, mean=partMeanPosterior, sigma=partCovPosterior)[1]*(1-pmvnorm(lower=partLowerBound, upper = partUpperBound, mean=partMeanPrior, sigma=partCovPrior)[1]))/
         (pmvnorm(lower=partLowerBound, upper = partUpperBound, mean=partMeanPrior, sigma=partCovPrior)[1]*(1-pmvnorm(lower=partLowerBound, upper = partUpperBound, mean=partMeanPosterior, sigma=partCovPosterior)[1]))
       # control the loop process
