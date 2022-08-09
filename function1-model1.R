@@ -71,8 +71,8 @@ bmi <- function(x, type = "metric", tolerance = .2, minBF = 3, fraction = 1){
 #' @method bmi lavaan
 #' @export
 bmi.lavaan <- function(x, type = "metric", tolerance = .2, minBF = 3, fraction = 1){
-  dat <- as.data.frame(lavInspect(object = x, what = "data"))
-  names(dat) <- lavNames(x)
+  browser()
+  dat <- get_lav_data(x)
   #Part1: prepare for recomputing the model
   # get the estimates
   estiOut <- parameterEstimates(x)
@@ -548,6 +548,24 @@ print.bayesian_invariance <- function(x, ...){
   }
 }
 
+get_lav_data <- function(x, ...){
+  dat <- lavInspect(object = x, what = "data")
+  if(inherits(dat, "list")){
+    if(length(dat) > 1){
+      grp <- lavInspect(object = x, what = "group")
+      grp_levels <- lavInspect(object = x, what = "group.label")
+      dat <- do.call(rbind, lapply(seq_along(grp_levels), function(i){
+        out <- as.data.frame(dat[[i]])
+        out[[grp]] <- grp_levels[i]
+        out
+      }))
+    } else {
+      dat <- dat[[1]]
+    }
+  }
+  dat
+}
+
 # section 1: example
 # CFA model
 model22 <- 'A  =~ Ab + Al + Af + An + Ar + Ac'
@@ -555,10 +573,10 @@ model22 <- 'A  =~ Ab + Al + Af + An + Ar + Ac'
 lavout <- cfa(model22, data = sesamesim, std.lv = TRUE, group = "sex")
 # approximate metric invariance
 set.seed(2020)
-result1 <- BMI1(lavout,type = 'metric',data = sesamesim, tolerance = 0.2,minBF = 10,times=2)
+result1 <- bmi(lavout,type = 'metric',tolerance = 0.2,minBF = 10,fraction=2)
 # partial approximate metric invariance
-result2 <- BMI1(lavout,type = 'metric',data = sesamesim, tolerance = 0.2,minBF = 65,times=2)
-# approximate scalar invariance
-result3 <- BMI1(lavout,type = 'scalar',data = sesamesim, tolerance = 0.2,minBF = 3,times=2)
-# partial approximate scalar invariance
-result4 <- BMI1(lavout,type = 'scalar',data = sesamesim, tolerance = 0.2,minBF = 10,times=2)
+# result2 <- BMI1(lavout,type = 'metric',data = sesamesim, tolerance = 0.2,minBF = 65,times=2)
+# # approximate scalar invariance
+# result3 <- BMI1(lavout,type = 'scalar',data = sesamesim, tolerance = 0.2,minBF = 3,times=2)
+# # partial approximate scalar invariance
+# result4 <- BMI1(lavout,type = 'scalar',data = sesamesim, tolerance = 0.2,minBF = 10,times=2)
