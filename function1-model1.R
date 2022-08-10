@@ -73,6 +73,11 @@ bmi <- function(x, type = "metric", tolerance = .2, minBF = 3, fraction = 1){
 bmi.lavaan <- function(x, type = "metric", tolerance = .2, minBF = 3, fraction = 1){
   browser()
   dat <- get_lav_data(x)
+  # Get parameter table
+  partab <- lavaan::partable(x)
+  # Add labels
+  labs <- do.call(paste0, partab[c("lhs", "op", "rhs")])
+  partab$labs <- labs
   #Part1: prepare for recomputing the model
   # get the estimates
   estiOut <- parameterEstimates(x)
@@ -90,6 +95,10 @@ bmi.lavaan <- function(x, type = "metric", tolerance = .2, minBF = 3, fraction =
   # get the group variable's name
   groupVariable <- lavInspect(x, what = "group")
   n_groups <- length(lavInspect(x, what = "group.label"))
+  # get sample size
+  sampsizes <- lavInspect(x, what = "nobs")
+  # fraction b
+  fraction_b <- fraction*(indicatorNum + 1)/(2 * sampsizes)
   # testing metric invariance
   # CJ: Make a separate function for metric invariance
   out <- switch(type,
@@ -102,7 +111,8 @@ bmi.lavaan <- function(x, type = "metric", tolerance = .2, minBF = 3, fraction =
                                       Equation = Equation,
                                       groupVariable = groupVariable,
                                       n_groups = n_groups,
-                                      fraction = fraction), # CJ: You still have to pass the correct arguments here
+                                      fraction_b = fraction_b,
+                                      partab = partab), # CJ: You still have to pass the correct arguments here
                 "scalar" = bmi_scalar()) # CJ: You still have to pass the correct arguments here
   class(out) <- c("bayesian_invariance", class(out))
   return(out)
@@ -118,28 +128,16 @@ bmi_metric <- function(x,
                        Equation,
                        groupVariable,
                        n_groups,
-                       fraction){
+                       fraction_b,
+                       partab){
 
 
   browser()
   #Part2: recreate the model in lavvan to align the loadings
-  # get the original loadings
-  # get the loadings of group 1 and 2
-  loadings <- get_loadings_by_group(x, n_groups = n_groups)
-
-
   # compute the factor's variance of group 1 and 2 that the product of loadings per group = 1
-  var_by_group <- apply(loadings, 2, function(i){
-    (prod(i)**(1/indicatorNum))**2
-  })
-
-  # adjust the factor's variance of group 1 and 2
-  adjustFactor <- paste0('F', ' ~~ ' ,'c(',var_by_group[1],',',
-                         var_by_group[2],')* ','F')
-  # set model for lavaan
-  Model <- c(Equation,adjustFactor)
   # run lavvan again
-  lavAdjusted <- cfa(model = Model, data = dat, std.lv = TRUE, group = groupVariable)
+  lavAdjusted <- lav_fix_var(partab)
+  lavAdjusted <- lavaan::update(x, model = lavAdjusted)
   #Part3: get the adjusted loadings, that is, comparable loadings
   # get the adjusted loadings
   AdjustedLoad <- get_loadings_by_group(lavAdjusted, n_groups = n_groups)
@@ -174,20 +172,14 @@ bmi_metric <- function(x,
   A <- cbind(A1,A2)
   browser()
   covPosterior<- A %*% covariance %*% t(A)
-  # get sample size
-  sampsizes <- lavInspect(lavAdjusted, what = "nobs")
-  # fraction b
-  b <- fraction*(indicatorNum + 1)/(2 * sampsizes)
+
   # get the prior covariance
-  covPrior1 <- cov1/b[1]
-  covPrior2 <- cov2/b[2]
+  covPrior1 <- cov1/fraction_b[1]
+  covPrior2 <- cov2/fraction_b[2]
   covPrior <- as.matrix(bdiag(covPrior1,covPrior2))
   covPrior <- A%*%covPrior%*%t(A)
-  ## compute Bayes factor
-  # CJ: Never set seed inside the function, especially every time the same seed!!!
-  # set.seed(seed)
-  BF <- (pmvnorm(lower=lowerBound, upper = upperBound, mean=meanPosterior, sigma=covPosterior)[1]*(1- pmvnorm(lower=lowerBound, upper = upperBound, mean=meanPrior, sigma=covPrior)[1]))/
-    (pmvnorm(lower=lowerBound, upper = upperBound, mean=meanPrior, sigma=covPrior)[1]*(1- pmvnorm(lower=lowerBound, upper = upperBound, mean=meanPosterior, sigma=covPosterior)[1]))
+
+  BF <- calc_bf_mi(lower = lowerBound, upper = upperBound, mprior = meanPrior, mpost = meanPosterior, sprior = covPrior, spost = covPosterior)
   browser()
   if(is.nan(BF)){ # SHould these be error messages instead?
     stop('Approximate metric invariance : Bayes factor cannot be computed. \n\n')
@@ -277,8 +269,8 @@ bmi_metric <- function(x,
       partCov <- as.matrix(bdiag(partCov1,partCov2))
       partCovPosterior<- A%*%partCov%*%t(A)
       # get the prior covariance
-      partCovPrior1 <- partCov1/b[1]
-      partCovPrior2 <- partCov2/b[2]
+      partCovPrior1 <- partCov1/fraction_b[1]
+      partCovPrior2 <- partCov2/fraction_b[2]
       partCovPrior <- as.matrix(bdiag(partCovPrior1,partCovPrior2))
       partCovPrior <- A%*%partCovPrior%*%t(A)
       ## get partial loadings, upper bound, and prior and posterior covarance
@@ -402,13 +394,10 @@ bmi_scalar <- function(...){
     A2<- diag(indicatorNum)*(-1)
     A <- cbind(A1,A2)
     covPosterior<- A%*%covariance%*%t(A)
-    # get sample size
-    sampsizes <- lavInspect(lavAdjusted, what = "nobs")
-    # fraction b
-    b <- times*(indicatorNum+1)/(2*sampsizes)
+
     # get prior covariance
-    covPrior1 <- cov1/b[1]
-    covPrior2 <- cov2/b[2]
+    covPrior1 <- cov1/fraction_b[1]
+    covPrior2 <- cov2/fraction_b[2]
     covPrior <- as.matrix(bdiag(covPrior1,covPrior2))
     covPrior <- A%*%covPrior%*%t(A)
     ## compute Bayes factor
@@ -493,8 +482,8 @@ bmi_scalar <- function(...){
         partCov <- as.matrix(bdiag(partCov1,partCov2))
         partCovPosterior<- A%*%partCov%*%t(A)
         # prior covariance
-        partCovPrior1 <- partCov1/b[1]
-        partCovPrior2 <- partCov2/b[2]
+        partCovPrior1 <- partCov1/fraction_b[1]
+        partCovPrior2 <- partCov2/fraction_b[2]
         partCovPrior <- as.matrix(bdiag(partCovPrior1,partCovPrior2))
         partCovPrior <- A%*%partCovPrior%*%t(A)
         ## get partial intercepts, upper bound, and prior and posterior covarance
@@ -559,6 +548,12 @@ print.bayesian_invariance <- function(x, ...){
   }
 }
 
+calc_bf_mi <- function(lower, upper, mprior, mpost, sprior, spost){
+  pmvpost <- pmvnorm(lower=lower, upper = upper, mean=mpost, sigma=spost)
+  pmvprior <- pmvnorm(lower=lower, upper = upper, mean=mprior, sigma=sprior)
+  (pmvpost * (1- pmvprior))/ (pmvprior*(1- pmvpost))
+}
+
 get_lav_data <- function(x, ...){
   dat <- lavInspect(object = x, what = "data")
   if(inherits(dat, "list")){
@@ -578,11 +573,8 @@ get_lav_data <- function(x, ...){
 }
 
 get_loadings_by_group <- function(x, n_groups){
-  loadings <- parameterEstimates(x)
-  loadings <- loadings[loadings$op == "=~", ]
-  labs <- do.call(paste0, loadings[c("lhs", "op", "rhs")])
-  loadings$labs <- labs
-  labs <- table(labs)
+  loadings <- x[x$op == "=~", ]
+  labs <- table(loadings$labs)
   if(any(labs != n_groups)){
     warning("Dropped loadings")
     labs <- labs[labs == n_groups]
@@ -593,6 +585,25 @@ get_loadings_by_group <- function(x, n_groups){
   return(matrix(loadings$est, ncol = n_groups, byrow = TRUE))
 }
 
+lav_fix_var <- function(partab){
+  loadings <- get_loadings_by_group(partab, n_groups = max(partab$group))
+  var_by_group <- apply(loadings, 2, function(i){
+    (prod(i)**(1/indicatorNum))**2
+  })
+  lv_nam <- lavaan::lavNames(partab, type = "lv")
+  add_this <- data.frame(
+    lhs = lv_nam,
+    op = "~~",
+    rhs = lv_nam,
+    group = 1:length(var_by_group),
+    free = 0,
+    ustart = var_by_group
+  )
+  lav_partable_merge(partab,
+                     add_this,
+                     remove.duplicated = TRUE, fromLast = TRUE)[, c("lhs", "op", "rhs", "group", "free",
+                                                                    "ustart")]
+}
 
 # section 1: example
 # CFA model
