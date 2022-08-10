@@ -112,7 +112,8 @@ bmi.lavaan <- function(x, type = "metric", tolerance = .2, minBF = 3, fraction =
                                       groupVariable = groupVariable,
                                       n_groups = n_groups,
                                       fraction_b = fraction_b,
-                                      partab = partab), # CJ: You still have to pass the correct arguments here
+                                      partab = partab,
+                                      tolerance = tolerance), # CJ: You still have to pass the correct arguments here
                 "scalar" = bmi_scalar()) # CJ: You still have to pass the correct arguments here
   class(out) <- c("bayesian_invariance", class(out))
   return(out)
@@ -129,57 +130,50 @@ bmi_metric <- function(x,
                        groupVariable,
                        n_groups,
                        fraction_b,
-                       partab){
+                       partab,
+                       tolerance){
 
 
   browser()
   #Part2: recreate the model in lavvan to align the loadings
   # compute the factor's variance of group 1 and 2 that the product of loadings per group = 1
   # run lavvan again
-  lavAdjusted <- lav_fix_var(partab)
+  var_by_group <- get_var_by_group(x)
+  lavAdjusted <- lav_fix_var(partab, var_by_group)
   lavAdjusted <- lavaan::update(x, model = lavAdjusted)
   #Part3: get the adjusted loadings, that is, comparable loadings
   # get the adjusted loadings
-  AdjustedLoad <- get_loadings_by_group(lavAdjusted, n_groups = n_groups)
+  AdjustedLoad <- get_loadings_by_group(lavAdjusted)
 
   # get the posterior and prior means
   # CJ: What's the logic of doing group 1 minus group 2?
   meanPosterior <- AdjustedLoad[, 1] - AdjustedLoad[, 2]
   meanPrior <- rep(0, indicatorNum)
   #Part4: get upper and lower bounds
-  # get the covariance of the observed variables
-  covx <- lavInspect(lavAdjusted, what = "cov.ov")
-  # The max value of the loadings in group 1 and 2
-  loadmax_grp <- sapply(seq_along(covx), function(i){
-    sqrt(diag(covx[[i]])/var_by_group[i])
-  })
-  # the upper and lower bounds
-  upperBound <- loadmax_grp[, 1]
-  upperBound[loadmax_grp[, 1] > loadmax_grp[, 2]] <- loadmax_grp[, 2][loadmax_grp[, 1] > loadmax_grp[, 2]]
-  upperBound <- tolerance * upperBound
-  lowerBound <- -1 * upperBound
+  bounds <- get_bounds(lavAdjusted, var_by_group, tolerance)
+
+
   #Part5: get posterior and prior covariance
   # get covariance of group 1 and 2
-  varName1 <- paste0('F', '=~' ,indicatorName)
-  varName2 <- paste0('F', '=~' ,indicatorName,'.g2')
-  vcovmat <- lavInspect(lavAdjusted, "vcov")
-  cov1 <- vcovmat[varName1, varName1]
-  cov2 <- vcovmat[varName2, varName2]
-  # get posterior covariance
-  covariance <- as.matrix(bdiag(cov1,cov2))
-  A1<- diag(indicatorNum)
-  A2<- -1 * diag(indicatorNum)
-  A <- cbind(A1,A2)
   browser()
+  # get posterior covariance
+  vcovmat <- lavInspect(lavAdjusted, "vcov")
+  is_loading <- grepl("=~", row.names(vcovmat))
+  covariance <- vcovmat[is_loading, is_loading]
+  # CJ: WHat is A?
+  A <- cbind(diag(indicatorNum), -1 * diag(indicatorNum))
   covPosterior<- A %*% covariance %*% t(A)
 
   # get the prior covariance
-  covPrior1 <- cov1/fraction_b[1]
-  covPrior2 <- cov2/fraction_b[2]
-  covPrior <- as.matrix(bdiag(covPrior1,covPrior2))
+  # Make block diagonal matrix of fractions to divide by
+  divby <- as.matrix(do.call(bdiag, lapply(fraction_b, matrix, nrow = indicatorNum, ncol = indicatorNum)))
+  # Divide covariance by fractions
+  covPrior <- covariance/divby
+  # Set NaNs to zero (divided by zero)
+  covPrior[is.nan(covPrior)] <- 0
   covPrior <- A%*%covPrior%*%t(A)
 
-  BF <- calc_bf_mi(lower = lowerBound, upper = upperBound, mprior = meanPrior, mpost = meanPosterior, sprior = covPrior, spost = covPosterior)
+  BF <- calc_bf_mi(lower = bounds[["lowerBound"]], upper = bounds[["upperBound"]], mprior = meanPrior, mpost = meanPosterior, sprior = covPrior, spost = covPosterior)
   browser()
   if(is.nan(BF)){ # SHould these be error messages instead?
     stop('Approximate metric invariance : Bayes factor cannot be computed. \n\n')
@@ -548,6 +542,21 @@ print.bayesian_invariance <- function(x, ...){
   }
 }
 
+get_bounds <- function(x, var_by_group, tolerance){
+  # get the covariance of the observed variables
+  covx <- lavInspect(x, what = "cov.ov")
+  # The max value of the loadings in group 1 and 2
+  loadmax_grp <- sapply(seq_along(covx), function(i){
+    sqrt(diag(covx[[i]])/var_by_group[i])
+  })
+  # the upper and lower bounds
+  upperBound <- loadmax_grp[, 1]
+  upperBound[loadmax_grp[, 1] > loadmax_grp[, 2]] <- loadmax_grp[, 2][loadmax_grp[, 1] > loadmax_grp[, 2]]
+  upperBound <- tolerance * upperBound
+  lowerBound <- -1 * upperBound
+  list(lowerBound = lowerBound, upperBound = upperBound)
+}
+
 calc_bf_mi <- function(lower, upper, mprior, mpost, sprior, spost){
   pmvpost <- pmvnorm(lower=lower, upper = upper, mean=mpost, sigma=spost)
   pmvprior <- pmvnorm(lower=lower, upper = upper, mean=mprior, sigma=sprior)
@@ -572,24 +581,23 @@ get_lav_data <- function(x, ...){
   dat
 }
 
-get_loadings_by_group <- function(x, n_groups){
-  loadings <- x[x$op == "=~", ]
-  labs <- table(loadings$labs)
-  if(any(labs != n_groups)){
-    warning("Dropped loadings")
-    labs <- labs[labs == n_groups]
+get_loadings_by_group <- function(x){
+  ests <- lavaan::inspect(x, what = "est")
+  if(!is.null(ests[["lambda"]])){
+    return(matrix(ests[["lambda"]], ncol = 1))
+  } else {
+    return(sapply(ests, `[[`, "lambda"))
   }
-  labs <- names(labs)
-  loadings <- loadings[loadings$labs %in% labs,]
-  loadings <- loadings[order(loadings$labs, loadings$group), ]
-  return(matrix(loadings$est, ncol = n_groups, byrow = TRUE))
 }
 
-lav_fix_var <- function(partab){
-  loadings <- get_loadings_by_group(partab, n_groups = max(partab$group))
+get_var_by_group <- function(x){
+  loadings <- get_loadings_by_group(x)
   var_by_group <- apply(loadings, 2, function(i){
     (prod(i)**(1/indicatorNum))**2
   })
+}
+
+lav_fix_var <- function(partab, var_by_group){
   lv_nam <- lavaan::lavNames(partab, type = "lv")
   add_this <- data.frame(
     lhs = lv_nam,
@@ -599,10 +607,10 @@ lav_fix_var <- function(partab){
     free = 0,
     ustart = var_by_group
   )
-  lav_partable_merge(partab,
+  suppressWarnings(lav_partable_merge(partab,
                      add_this,
                      remove.duplicated = TRUE, fromLast = TRUE)[, c("lhs", "op", "rhs", "group", "free",
-                                                                    "ustart")]
+                                                                    "ustart")])
 }
 
 # section 1: example
