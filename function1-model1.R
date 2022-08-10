@@ -71,73 +71,36 @@ bmi <- function(x, type = "metric", tolerance = .2, minBF = 3, fraction = 1){
 #' @method bmi lavaan
 #' @export
 bmi.lavaan <- function(x, type = "metric", tolerance = .2, minBF = 3, fraction = 1){
-  browser()
-  dat <- get_lav_data(x)
+  # Capture function call
+  cl <- match.call()
+  # Add arguments
   # Get parameter table
-  partab <- lavaan::partable(x)
-  # Add labels
-  labs <- do.call(paste0, partab[c("lhs", "op", "rhs")])
-  partab$labs <- labs
+  cl[["partab"]] <- lavaan::partable(x)
   #Part1: prepare for recomputing the model
   # get the estimates
-  estiOut <- parameterEstimates(x)
-  # get the indicaors' name
-  indicatorName <- unique(estiOut[estiOut$op == "=~", "rhs"])
+  cl[["estiOut"]] <- parameterEstimates(x)
+  # get the indicators' name
+  cl[["indicatorName"]] <- unique(estiOut[estiOut$op == "=~", "rhs"])
   # get the number of indicator
-  indicatorNum <- length(indicatorName)
-  # add the indicators one by one
-  indicatorSum <- paste0(indicatorName,collapse = " + ")
-  # create the CFA equation
-  Equation <- paste0('F', ' =~ ' ,indicatorSum)
-  # adjust latent variable
-  # adjustFactor <- paste0('F', ' ~~ ' ,'c(',varG1,',',
-  #                      varG2,')* ','F')
-  # get the group variable's name
-  groupVariable <- lavInspect(x, what = "group")
-  n_groups <- length(lavInspect(x, what = "group.label"))
-  # get sample size
-  sampsizes <- lavInspect(x, what = "nobs")
+  cl[["indicatorNum"]] <- length(indicatorName)
+  cl[["n_groups"]] <- length(lavInspect(x, what = "group.label"))
   # fraction b
-  fraction_b <- fraction*(indicatorNum + 1)/(2 * sampsizes)
-  # testing metric invariance
-  # CJ: Make a separate function for metric invariance
-  out <- switch(type,
-                "metric" = bmi_metric(x = x,
-                                      dat = dat,
-                                      estiOut = estiOut,
-                                      indicatorName = indicatorName,
-                                      indicatorNum = indicatorNum,
-                                      indicatorSum = indicatorSum,
-                                      Equation = Equation,
-                                      groupVariable = groupVariable,
-                                      n_groups = n_groups,
-                                      fraction_b = fraction_b,
-                                      partab = partab,
-                                      tolerance = tolerance), # CJ: You still have to pass the correct arguments here
-                "scalar" = bmi_scalar()) # CJ: You still have to pass the correct arguments here
+  cl[["fraction_b"]] <- fraction*(indicatorNum + 1)/(2 * lavInspect(x, what = "nobs"))
+  # Replace function call with internal mi function
+  cl[[1L]] <- str2lang(paste0("bmi_", type))
+  # Evaluate MI
+  out <- eval.parent(cl)
   class(out) <- c("bayesian_invariance", class(out))
   return(out)
 }# end function
 
 # CJ: You still have to pass the correct arguments here
-bmi_metric <- function(x,
-                       dat,
-                       estiOut,
-                       indicatorName,
-                       indicatorNum,
-                       indicatorSum,
-                       Equation,
-                       groupVariable,
-                       n_groups,
-                       fraction_b,
-                       partab,
-                       tolerance){
-
-
-  browser()
-  #Part2: recreate the model in lavvan to align the loadings
+bmi_metric <- function(...){
+  dots <- list(...)
+  attach(dots)
+  #Part2: recreate the model in lavaan to align the loadings
   # compute the factor's variance of group 1 and 2 that the product of loadings per group = 1
-  # run lavvan again
+  # run lavaan again
   var_by_group <- get_var_by_group(x)
   lavAdjusted <- lav_fix_var(partab, var_by_group)
   lavAdjusted <- lavaan::update(x, model = lavAdjusted)
@@ -155,7 +118,6 @@ bmi_metric <- function(x,
 
   #Part5: get posterior and prior covariance
   # get covariance of group 1 and 2
-  browser()
   # get posterior covariance
   vcovmat <- lavInspect(lavAdjusted, "vcov")
   is_loading <- grepl("=~", row.names(vcovmat))
@@ -227,7 +189,7 @@ bmi_metric <- function(x,
                                  partVarG2,')* ','F')
       # set model for lavaan
       partAdjustedModel <- c(Equation,adjustPartFactor)
-      # run lavvan again
+      # run lavaan again
       lavPart <- cfa(partAdjustedModel, dat, std.lv = TRUE, group = groupVariable)
       ## get the adjusted loadings
       # get the adjusted estimates
@@ -330,7 +292,7 @@ bmi_metric <- function(x,
 
 # CJ: You still have to pass the correct arguments here
 bmi_scalar <- function(...){
-    #Part2: recreate model in lavvan to align intercepts
+    #Part2: recreate model in lavaan to align intercepts
     # get the original intercepts
     Nint <- estiOut[estiOut$op == "~1", "est"]
     # get the intercepts of group 1 and 2
@@ -344,7 +306,7 @@ bmi_scalar <- function(...){
                             meanG2,')* ','1')
     # set model for lavaan
     Model <- c(Equation,adjustFactor, adjustFactorM)
-    # run lavvan again
+    # run lavaan again
     lavAdjusted <- cfa(Model, dat, std.lv = TRUE, group = groupVariable)
     #Part3: get the adjusted intercepts, that is, comparable intercepts
     # get the adjusted estimates
@@ -456,7 +418,7 @@ bmi_scalar <- function(...){
                                     partMeanG2,')* ','1')
         # set model for lavaan
         adjustedModel <- c(Equation,adjustFactor, adjustPartFactorM)
-        # run lavvan again
+        # run lavaan again
         lavPart <- cfa(adjustedModel, dat, std.lv = TRUE, group = groupVariable)
         ## get the adjusted intercepts
         # get the adjusted estimates
