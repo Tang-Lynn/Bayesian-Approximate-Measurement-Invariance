@@ -162,9 +162,7 @@ bf_mi <- function(x, items, fraction_b, tolerance, by_item = FALSE) {
   #Part5: get posterior and prior covariance
   # get covariance of group 1 and 2
   # get posterior covariance
-  vcovmat <- lavInspect(lavAdjusted, "vcov")
-  these_loadings <- grepl("=~", row.names(vcovmat), fixed = TRUE) &  grepl(paste0("(", paste0(items, collapse = "|"), ")"), row.names(vcovmat))
-  covariance <- vcovmat[these_loadings, these_loadings, drop = FALSE]
+  covariance <- lav_cov_matrix(lavAdjusted, items = items)
   # CJ: A helps us get the covariance of the difference between indicators
   A <- cbind(diag(indicatorNum),-1 * diag(indicatorNum))
   covPosterior <- A %*% covariance %*% t(A)
@@ -772,6 +770,19 @@ lav_drop_item <- function(x, item) {
   lavaan::update(x, model = thepars)
 }
 
+lav_cov_matrix <- function(x, items = NULL){
+  vcv = x@vcov$vcov
+  rownames(vcv) <- colnames(vcv) <- x@ParTable$rhs[x@ParTable$free > 0]
+  indx <- (x@ParTable$op == "=~")[x@ParTable$free > 0]
+  if(is.null(items)){
+    return(vcv[indx, indx, drop = FALSE])
+  } else {
+    out <- vcv[indx, indx, drop = FALSE]
+    indx <- which(rownames(out) %in% items)
+    return(out[indx, indx, drop = FALSE])
+  }
+}
+
 lav_fix_var <- function(x, var_by_group) {
   partab <- lavaan::partable(x)
   lv_nam <- lavaan::lavNames(partab, type = "lv")
@@ -818,3 +829,9 @@ result1 <-
 # result3 <- BMI1(lavout,type = 'scalar',data = sesamesim, tolerance = 0.2,minBF = 3,times=2)
 # # partial approximate scalar invariance
 # result4 <- BMI1(lavout,type = 'scalar',data = sesamesim, tolerance = 0.2,minBF = 10,times=2)
+
+library(microbenchmark)
+microbenchmark(
+  lavInspect(lavout, "vcov"),
+  lav_cov_matrix(lavout)
+)
