@@ -2,6 +2,7 @@
 # CJ: for example, there should always be a space between comma's and mathematical operators,
 # CJ: variable names should be snake_case not camelCase, and function names should be verbs when possible
 # CJ: https://style.tidyverse.org/syntax.html
+# testing
 library(lavaan)  # CFA model
 library(bain) # example from this package
 library(psych)    # Descriptives
