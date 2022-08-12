@@ -64,57 +64,95 @@ library(Matrix) # matrix
 #' }
 #' @rdname bmi
 #' @export
-bmi <- function(x, type = "metric", tolerance = .2, minBF = 3, fraction = 1){
-  UseMethod("bmi", x)
-}
+bmi <-
+  function(x,
+           type = "metric",
+           tolerance = .2,
+           minBF = 3,
+           fraction = 1) {
+    UseMethod("bmi", x)
+  }
 
 #' @method bmi lavaan
 #' @export
-bmi.lavaan <- function(x, type = "metric", tolerance = .2, minBF = 3, fraction = 1){
-  # Capture function call
-  cl <- match.call()
-  # Add arguments
-  #Part1: prepare for recomputing the model
-  # Replace function call with internal mi function
-  cl[[1L]] <- str2lang(paste0("bmi_", type))
-  # Evaluate MI
-  out <- eval.parent(cl)
-  class(out) <- c("bayesian_invariance", class(out))
-  return(out)
-}# end function
+bmi.lavaan <-
+  function(x,
+           type = "metric",
+           tolerance = .2,
+           minBF = 3,
+           fraction = 1) {
+    # Capture function call
+    cl <- match.call()
+    # Add arguments
+    #Part1: prepare for recomputing the model
+    # Replace function call with internal mi function
+    cl[[1L]] <- str2lang(paste0("bmi_", type))
+    # Evaluate MI
+    out <- eval.parent(cl)
+    class(out) <- c("bayesian_invariance", class(out))
+    return(out)
+  }# end function
 
 # CJ: You still have to pass the correct arguments here
-bmi_metric <- function(...){
+bmi_metric <- function(...) {
   browser()
   cl <- match.call()
   dots <- list(...)
   suppressMessages(attach(dots))
   the_items <- lavaan::lavNames(x, type = "ov")
-  if(!length(the_items) > 0){
+  if (!length(the_items) > 0) {
     warning("Could not establish partial invariance; all items are variant.")
     out <- dots[c("BF_vec", "BF_item_mat")]
-    out$warnings <- "Could not establish partial invariance; all items are variant."
+    out$warnings <-
+      "Could not establish partial invariance; all items are variant."
     class(out) <- c("bmi_object", class(out))
     return(out)
   }
-  if(is.null(dots[["BF_vec"]])) BF_vec <- NULL
-  if(is.null(dots[["BF_item_mat"]])) BF_item_mat <- matrix(nrow = 0, ncol = length(the_items), dimnames = list(NULL, the_items))
+  if (is.null(dots[["BF_vec"]]))
+    BF_vec <- NULL
+  if (is.null(dots[["BF_item_mat"]]))
+    BF_item_mat <-
+    matrix(
+      nrow = 0,
+      ncol = length(the_items),
+      dimnames = list(NULL, the_items)
+    )
   partab <- lavaan::partable(x)
   indicatorNum <- length(lavaan::lavNames(x, type = "ov"))
   n_groups <- length(lavInspect(x, what = "group.label"))
   # fraction b
-  fraction_b <- fraction * (indicatorNum + 1)/(2 * lavInspect(x, what = "nobs"))
+  fraction_b <-
+    fraction * (indicatorNum + 1) / (2 * lavInspect(x, what = "nobs"))
   #Part2: recreate the model in lavaan to align the loadings
   # compute the factor's variance of group 1 and 2 that the product of loadings per group = 1
   # run lavaan again
   loadings_original <- get_loadings_by_group(x)
   var_by_group <- get_var_by_group(x)
-  lavAdjusted <- lav_fix_var(partab, var_by_group)
-  lavAdjusted <- lavaan::update(x, model = lavAdjusted)
+  browser()
+  BFs <- bf_mi(x, var_by_group, fraction_b = fraction_b, tolerance = tolerance)
+  BF <- BFs$BF
+  BF_item <- BFs$BF_item
+  if (BF < minBF) {
+    drop_in_order <- the_items[order(BF_item, decreasing = TRUE)]
+    BF_drop <- sapply((length(drop_in_order) - 1):1, function(i) {
+      var_by_group_item <- get_var_by_group(x, items = head(drop_in_order, i))
+      # Recalculate the Bayes factor, dropping an increasing number of items
+      bf_mi(x, var_by_group_item, fraction_b = fraction_b, tolerance = tolerance)
+    })
+  }
+  out <- list(BF = BF, BF_item = BF_item, BF_drop = BF_drop)
+  out[["cl"]] <- cl
+  class(out) <- c("bmi_object", class(out))
+  return(out)
+}
+
+bf_mi <- function(x, var_by_group, fraction_b, tolerance) {
+  browser()
+  lavAdjusted <- lav_fix_var(x, var_by_group)
   #Part3: get the adjusted loadings, that is, comparable loadings
   # get the adjusted loadings
   loadings_adjusted <- get_loadings_by_group(lavAdjusted)
-
+  indicatorNum <- nrow(loadings_adjusted)
   # get the posterior and prior means
   # CJ: What's the logic of doing group 1 minus group 2?
   meanPosterior <- loadings_adjusted[, 1] - loadings_adjusted[, 2]
@@ -130,57 +168,48 @@ bmi_metric <- function(...){
   is_loading <- grepl("=~", row.names(vcovmat))
   covariance <- vcovmat[is_loading, is_loading]
   # CJ: A helps us get the covariance of the difference between indicators
-  A <- cbind(diag(indicatorNum), -1 * diag(indicatorNum))
-  covPosterior<- A %*% covariance %*% t(A)
+  A <- cbind(diag(indicatorNum),-1 * diag(indicatorNum))
+  covPosterior <- A %*% covariance %*% t(A)
 
   # get the prior covariance
   # Make block diagonal matrix of fractions to divide by
-  divby <- as.matrix(do.call(bdiag, lapply(fraction_b, matrix, nrow = indicatorNum, ncol = indicatorNum)))
+  divby <-
+    as.matrix(do.call(
+      bdiag,
+      lapply(fraction_b, matrix, nrow = indicatorNum, ncol = indicatorNum)
+    ))
   # Divide covariance by fractions
-  covPrior <- covariance/divby
+  covPrior <- covariance / divby
   # Set NaNs to zero (divided by zero)
   covPrior[is.nan(covPrior)] <- 0
-  covPrior <- A%*%covPrior%*%t(A)
+  covPrior <- A %*% covPrior %*% t(A)
 
-  BF <- calc_bf_mi(lower = bounds[["lowerBound"]], upper = bounds[["upperBound"]], mprior = meanPrior, mpost = meanPosterior, sprior = covPrior, spost = covPosterior)
-  if(is.nan(BF)){ # SHould these be error messages instead?
+  BF <-
+    calc_bf_mi(
+      lower = bounds[["lowerBound"]],
+      upper = bounds[["upperBound"]],
+      mprior = meanPrior,
+      mpost = meanPosterior,
+      sprior = covPrior,
+      spost = covPosterior
+    )
+  if (is.nan(BF)) {
+    # SHould these be error messages instead?
     message('Approximate metric invariance : Bayes factor cannot be computed. \n\n')
   }
   # Run a test: Make the BF NaN, and see if the rest of the function works
-  BF_item <- sapply(seq(indicatorNum), function(i){
-    calc_bf_mi(lower = bounds[["lowerBound"]][i],
-               upper = bounds[["upperBound"]][i],
-               mprior = 0,
-               mpost = meanPosterior[i],
-               sprior = covPrior[i, i, drop = FALSE],
-               spost = covPosterior[i, i, drop = FALSE])
+  BF_item <- sapply(seq(indicatorNum), function(i) {
+    calc_bf_mi(
+      lower = bounds[["lowerBound"]][i],
+      upper = bounds[["upperBound"]][i],
+      mprior = 0,
+      mpost = meanPosterior[i],
+      sprior = covPrior[i, i, drop = FALSE],
+      spost = covPosterior[i, i, drop = FALSE]
+    )
   })
-
-  # out <- list(BF = BF,
-  #             BF_item = BF_item, cl = cl)
-  BF_vec <- c(BF_vec, BF)
-  addrow <- rep(NA, ncol(BF_item_mat))
-  addrow[match(the_items, colnames(BF_item_mat))] <- BF_item
-  BF_item_mat <- rbind(BF_item_mat, addrow)
-  out <- list(BF_vec, BF_item_mat)
-
-  if(BF < minBF){
-    browser()
-    cl_recursive <- cl
-    cl_recursive[["BF_vec"]] <- BF_vec
-    cl_recursive[["BF_item_mat"]] <- BF_item_mat
-    drop_item <- the_items[which.min(BF_item)]
-    x <- lav_drop_item(x, drop_item)
-    cl_recursive[["x"]] <- x
-    out <- eval.parent(cl_recursive)
-  }
-  rownames(out[["BF_item_mat"]]) <- NULL
-  out[["cl"]] <- cl
-  class(out) <- c("bmi_object", class(out))
-  return(out)
+  return(list(BF = BF, BF_item = BF_item))
 }
-
-
 
 #
 # recursive_partial_bf <- function(x, bmi_object){
@@ -320,251 +349,388 @@ bmi_metric <- function(...){
 # } # end testing metric invariance
 
 # CJ: You still have to pass the correct arguments here
-bmi_scalar <- function(...){
-    #Part2: recreate model in lavaan to align intercepts
-    # get the original intercepts
-    Nint <- estiOut[estiOut$op == "~1", "est"]
-    # get the intercepts of group 1 and 2
-    intG1 <- Nint[1:indicatorNum]
-    intG2 <- Nint[(indicatorNum + 2):(2*indicatorNum + 1)]
-    # compute the factor's mean of group1 and 2 that the sum of intercepts per group = 0
-    meanG1 <- sum(intG1)/sum(loadG1)
-    meanG2 <- sum(intG2)/sum(loadG2)
-    # adjust factor's mean
-    adjustFactorM <- paste0('F', ' ~ ' ,'c(',meanG1,',',
-                            meanG2,')* ','1')
-    # set model for lavaan
-    Model <- c(Equation,adjustFactor, adjustFactorM)
-    # run lavaan again
-    lavAdjusted <- cfa(Model, dat, std.lv = TRUE, group = groupVariable)
-    #Part3: get the adjusted intercepts, that is, comparable intercepts
-    # get the adjusted estimates
-    estiAdjusted <- parameterEstimates(lavAdjusted)
-    # get the adjusted intercepts
-    AdjustedInt <- estiAdjusted[estiAdjusted$op == "~1", "est"]
-    # get the adjusted intercepts of group 1 and 2
-    AdjustedInt1 <- AdjustedInt[1:indicatorNum]
-    AdjustedInt2 <- AdjustedInt[(indicatorNum + 2):(2*indicatorNum + 1)]
-    # get the posterior and prior means
-    meanPosterior <- AdjustedInt1 - AdjustedInt2
-    meanPrior <- rep(0, indicatorNum)
-    #Part4: get upper and lower bounds
-    # data from group 1 and 2
-    da <- lavInspect(lavAdjusted, what = "data")
-    dataG1 <- as.data.frame(da[1])
-    dataG2 <- as.data.frame(da[2])
-    # robust max and min intercept in group 1
-    # CJ: Don't use an extra package just to compute the quantile
-    difG1 <- apply(sapply(dataG1, quantile, probs = c(.2, .8)), 2, diff)
+bmi_scalar <- function(...) {
+  #Part2: recreate model in lavaan to align intercepts
+  # get the original intercepts
+  Nint <- estiOut[estiOut$op == "~1", "est"]
+  # get the intercepts of group 1 and 2
+  intG1 <- Nint[1:indicatorNum]
+  intG2 <- Nint[(indicatorNum + 2):(2 * indicatorNum + 1)]
+  # compute the factor's mean of group1 and 2 that the sum of intercepts per group = 0
+  meanG1 <- sum(intG1) / sum(loadG1)
+  meanG2 <- sum(intG2) / sum(loadG2)
+  # adjust factor's mean
+  adjustFactorM <- paste0('F', ' ~ ' , 'c(', meanG1, ',',
+                          meanG2, ')* ', '1')
+  # set model for lavaan
+  Model <- c(Equation, adjustFactor, adjustFactorM)
+  # run lavaan again
+  lavAdjusted <-
+    cfa(Model, dat, std.lv = TRUE, group = groupVariable)
+  #Part3: get the adjusted intercepts, that is, comparable intercepts
+  # get the adjusted estimates
+  estiAdjusted <- parameterEstimates(lavAdjusted)
+  # get the adjusted intercepts
+  AdjustedInt <- estiAdjusted[estiAdjusted$op == "~1", "est"]
+  # get the adjusted intercepts of group 1 and 2
+  AdjustedInt1 <- AdjustedInt[1:indicatorNum]
+  AdjustedInt2 <-
+    AdjustedInt[(indicatorNum + 2):(2 * indicatorNum + 1)]
+  # get the posterior and prior means
+  meanPosterior <- AdjustedInt1 - AdjustedInt2
+  meanPrior <- rep(0, indicatorNum)
+  #Part4: get upper and lower bounds
+  # data from group 1 and 2
+  da <- lavInspect(lavAdjusted, what = "data")
+  dataG1 <- as.data.frame(da[1])
+  dataG2 <- as.data.frame(da[2])
+  # robust max and min intercept in group 1
+  # CJ: Don't use an extra package just to compute the quantile
+  difG1 <-
+    apply(sapply(dataG1, quantile, probs = c(.2, .8)), 2, diff)
 
-    # robust max and min intercept in group 2
-    difG2 <- apply(sapply(dataG2, quantile, probs = c(.2, .8)), 2, diff)
-    # get the bound
-    # CJ: Instead of a for loop, use vectorization and boolean indexing
-    dif <- tolerance*difG1[i]
-    dif[difG1 > difG2] <- (tolerance*difG2)[difG1 > difG2]
+  # robust max and min intercept in group 2
+  difG2 <-
+    apply(sapply(dataG2, quantile, probs = c(.2, .8)), 2, diff)
+  # get the bound
+  # CJ: Instead of a for loop, use vectorization and boolean indexing
+  dif <- tolerance * difG1[i]
+  dif[difG1 > difG2] <- (tolerance * difG2)[difG1 > difG2]
 
-    # the upper and lower bounds
-    upperBound <- unlist(dif)
-    lowerBound <- -upperBound
-    #Part5: get posterior and prior covariance
-    # get covariance of group 1 and 2
-    varName1 <- paste0(indicatorName, '~1')
-    varName2 <- paste0(indicatorName, '~1.g2')
-    cov1 <- lavInspect(lavAdjusted, "vcov")[varName1, varName1]
-    cov2 <- lavInspect(lavAdjusted, "vcov")[varName2, varName2]
-    # get posterior covariance
-    covariance <- as.matrix(bdiag(cov1,cov2))
-    A1<- diag(indicatorNum)
-    A2<- diag(indicatorNum)*(-1)
-    A <- cbind(A1,A2)
-    covPosterior<- A%*%covariance%*%t(A)
+  # the upper and lower bounds
+  upperBound <- unlist(dif)
+  lowerBound <- -upperBound
+  #Part5: get posterior and prior covariance
+  # get covariance of group 1 and 2
+  varName1 <- paste0(indicatorName, '~1')
+  varName2 <- paste0(indicatorName, '~1.g2')
+  cov1 <- lavInspect(lavAdjusted, "vcov")[varName1, varName1]
+  cov2 <- lavInspect(lavAdjusted, "vcov")[varName2, varName2]
+  # get posterior covariance
+  covariance <- as.matrix(bdiag(cov1, cov2))
+  A1 <- diag(indicatorNum)
+  A2 <- diag(indicatorNum) * (-1)
+  A <- cbind(A1, A2)
+  covPosterior <- A %*% covariance %*% t(A)
 
-    # get prior covariance
-    covPrior1 <- cov1/fraction_b[1]
-    covPrior2 <- cov2/fraction_b[2]
-    covPrior <- as.matrix(bdiag(covPrior1,covPrior2))
-    covPrior <- A%*%covPrior%*%t(A)
-    ## compute Bayes factor
-    set.seed(seed)
-    BF <- (pmvnorm(lower=lowerBound, upper = upperBound, mean=meanPosterior, sigma=covPosterior)[1]*(1- pmvnorm(lower=lowerBound, upper = upperBound, mean=meanPrior, sigma=covPrior)[1]))/
-      (pmvnorm(lower=lowerBound, upper = upperBound, mean=meanPrior, sigma=covPrior)[1]*(1- pmvnorm(lower=lowerBound, upper = upperBound, mean=meanPosterior, sigma=covPosterior)[1]))
-    BF <- as.data.frame(BF)
-    colnames(BF) <- 'scalar'
-    rownames(BF) <- 'Bayes factor'
-    #BF <- round(BF,3)
-    BF1 <- unlist(BF)
-    if(is.nan(BF1)){
-      cat('Approximate scalar invariance : Bayes factor cannot be computed. \n\n')
-      print(BF)
-    }
-    else if(BF >= minBF){
-      cat('When the minimum Bayes factor should  >=',minBF,',','approximate scalar invariance is supported. \n\n')
-      print(BF)
-    } else {
-      #Part6: compute BF for each pair of the intercept
-      BF_item <- list()
-      for(i in 1:indicatorNum){
-        # get each posterior mean
-        eachMeanPosterior <- meanPosterior[i]
-        # get each upper and lower bound
-        eachUpperBound <- upperBound[i]
-        eachLowerBound <- -eachUpperBound
-        # get each posterior covariance
-        eachCovPosterior <- covPosterior[i,]
-        eachCovPosterior <- eachCovPosterior[i]
-        eachCovPosterior <- matrix(eachCovPosterior,1,1)
-        # get each prior covariance
-        eachCovPrior <- covPrior[i,]
-        eachCovPrior <- eachCovPrior[i]
-        eachCovPrior <- matrix(eachCovPrior,1,1)
-        # Bayes Factor for each loading
-        set.seed(seed)
-        BF_item[i] <- (pmvnorm(lower=eachLowerBound, upper = eachUpperBound, mean=eachMeanPosterior, sigma=eachCovPosterior)[1]*(1-pmvnorm(lower=eachLowerBound, upper = eachUpperBound, mean=0, sigma=eachCovPrior)[1]))/
-          (pmvnorm(lower=eachLowerBound, upper = eachUpperBound, mean=0, sigma=eachCovPrior)[1]*(1-pmvnorm(lower=eachLowerBound, upper = eachUpperBound, mean=eachMeanPosterior, sigma=eachCovPosterior)[1])/(1-pmvnorm(lower=eachLowerBound, upper = eachUpperBound, mean=0, sigma=eachCovPrior)[1]))
-        #BF_item[[i]] <- round(BF_item[[i]],3)
-        # name BF with the indicator's name
-        names(BF_item)[i] <- paste(indicatorName[i],  sep = "")
-      } # end for(i in 1:indicatorNum)
-      partBF <- BF
-      PartBF_item <- unlist(BF_item)
-      partIntG1 <- intG1
-      partIntG2 <- intG2
-      #Part7 : compute partial BF. If patial BF always < minBF,
-      #        the loop will exit with length(PartBF_item) == 1.
-      while(partBF < minBF & length(PartBF_item) != 1){
-        ## recompute model
-        # get partial intercepts
-        partIntG1 <- partIntG1[- which.min(PartBF_item)]
-        partIntG2 <- partIntG2[- which.min(PartBF_item)]
-        # the number of the partial intercepts
-        partNum <- length(partIntG2)
-        # recompute factor's mean of group 1 and 2 that the sum of the partial intercepts per group = 0
-        partMeanG1 <- sum(partIntG1)/sum(loadG1)
-        partMeanG2 <- sum(partIntG2)/sum(loadG2)
-        # adjust factor's mean
-        adjustPartFactorM <- paste0('F', ' ~ ' ,'c(',partMeanG1,',',
-                                    partMeanG2,')* ','1')
-        # set model for lavaan
-        adjustedModel <- c(Equation,adjustFactor, adjustPartFactorM)
-        # run lavaan again
-        lavPart <- cfa(adjustedModel, dat, std.lv = TRUE, group = groupVariable)
-        ## get the adjusted intercepts
-        # get the adjusted estimates
-        estiPart <- parameterEstimates(lavPart)
-        # get the adjusted intercepts
-        partInt <- estiPart[estiPart$op == "~1", "est"]
-        # get the adjusted intercepts of group 1 and 2
-        AdjustedPartIntG1 <- partInt[1:indicatorNum]
-        AdjustedPartIntG2 <- partInt[(indicatorNum + 2):(2*indicatorNum + 1)]
-        ## get the upper bound
-        partUpperBound <- upperBound
-        ## get posterior and prior covariance
-        # get covariance of group 1 and 2
-        partCov1 <- lavInspect(lavPart, "vcov")[varName1, varName1]
-        partCov2 <- lavInspect(lavPart, "vcov")[varName2, varName2]
-        # posterior covariance
-        partCov <- as.matrix(bdiag(partCov1,partCov2))
-        partCovPosterior<- A%*%partCov%*%t(A)
-        # prior covariance
-        partCovPrior1 <- partCov1/fraction_b[1]
-        partCovPrior2 <- partCov2/fraction_b[2]
-        partCovPrior <- as.matrix(bdiag(partCovPrior1,partCovPrior2))
-        partCovPrior <- A%*%partCovPrior%*%t(A)
-        ## get partial intercepts, upper bound, and prior and posterior covarance
-        PartBF_item2 <- unlist(BF_item)
-        # the number of the deleted loadings
-        DeletedNum <- indicatorNum - partNum
-        for (j in 1:DeletedNum){
-          # the partial loadings of group 1 and 2
-          AdjustedPartIntG1 <- AdjustedPartIntG1[- which.min(PartBF_item2)]
-          AdjustedPartIntG2 <- AdjustedPartIntG2[- which.min(PartBF_item2)]
-          # the partial upper bound
-          partUpperBound <- partUpperBound[- which.min(PartBF_item2)]
-          # the partial posterior covariance
-          partCovPosterior <- partCovPosterior[- which.min(PartBF_item2),- which.min(PartBF_item2)]
-          # the partial prior covariance
-          partCovPrior <- partCovPrior[- which.min(PartBF_item2),- which.min(PartBF_item2)]
-          # control this loop process
-          PartBF_item2 <- PartBF_item2[- which.min(PartBF_item2)]
-        }
-        # get partial posterior and prior means
-        partMeanPosterior <- AdjustedPartIntG1 - AdjustedPartIntG2
-        partMeanPrior <- rep(0, partNum)
-        #  get the partial lower bound
-        partLowerBound <- -partUpperBound
-        ## compute partial BF
-        set.seed(seed)
-        partBF <- (pmvnorm(lower=partLowerBound, upper = partUpperBound, mean=partMeanPosterior, sigma=partCovPosterior)[1]*(1-pmvnorm(lower=partLowerBound, upper = partUpperBound, mean=partMeanPrior, sigma=partCovPrior)[1]))/
-          (pmvnorm(lower=partLowerBound, upper = partUpperBound, mean=partMeanPrior, sigma=partCovPrior)[1]*(1-pmvnorm(lower=partLowerBound, upper = partUpperBound, mean=partMeanPosterior, sigma=partCovPosterior)[1]))
-        # control the loop process
-        PartBF_item <- PartBF_item[- which.min(PartBF_item)]
-      }#end while
-      ## arrange partial BF
-      partBF <- as.data.frame(partBF)
-      #partBF <- round(partBF,3)
-      colnames(partBF) <- 'partial'
-      # get deleted indicator
-      deletedIndicator <- setdiff(names(BF_item), names(PartBF_item))
-      ## print BF of all intercepts, BF of each intercepts, BF of partial intercepts
-      ## arrange a table
-      BF_item <- as.data.frame(BF_item)
-      #BF_item <- round(BF_item,3)
-      out <- cbind(BF,partBF,BF_item)
-      # CJ: Do not print in this function
-      return(out)
-    }# end if (BF < minBF)
+  # get prior covariance
+  covPrior1 <- cov1 / fraction_b[1]
+  covPrior2 <- cov2 / fraction_b[2]
+  covPrior <- as.matrix(bdiag(covPrior1, covPrior2))
+  covPrior <- A %*% covPrior %*% t(A)
+  ## compute Bayes factor
+  set.seed(seed)
+  BF <-
+    (
+      pmvnorm(
+        lower = lowerBound,
+        upper = upperBound,
+        mean = meanPosterior,
+        sigma = covPosterior
+      )[1] * (
+        1 - pmvnorm(
+          lower = lowerBound,
+          upper = upperBound,
+          mean = meanPrior,
+          sigma = covPrior
+        )[1]
+      )
+    ) /
+    (
+      pmvnorm(
+        lower = lowerBound,
+        upper = upperBound,
+        mean = meanPrior,
+        sigma = covPrior
+      )[1] * (
+        1 - pmvnorm(
+          lower = lowerBound,
+          upper = upperBound,
+          mean = meanPosterior,
+          sigma = covPosterior
+        )[1]
+      )
+    )
+  BF <- as.data.frame(BF)
+  colnames(BF) <- 'scalar'
+  rownames(BF) <- 'Bayes factor'
+  #BF <- round(BF,3)
+  BF1 <- unlist(BF)
+  if (is.nan(BF1)) {
+    cat('Approximate scalar invariance : Bayes factor cannot be computed. \n\n')
+    print(BF)
+  }
+  else if (BF >= minBF) {
+    cat(
+      'When the minimum Bayes factor should  >=',
+      minBF,
+      ',',
+      'approximate scalar invariance is supported. \n\n'
+    )
+    print(BF)
+  } else {
+    #Part6: compute BF for each pair of the intercept
+    BF_item <- list()
+    for (i in 1:indicatorNum) {
+      # get each posterior mean
+      eachMeanPosterior <- meanPosterior[i]
+      # get each upper and lower bound
+      eachUpperBound <- upperBound[i]
+      eachLowerBound <- -eachUpperBound
+      # get each posterior covariance
+      eachCovPosterior <- covPosterior[i, ]
+      eachCovPosterior <- eachCovPosterior[i]
+      eachCovPosterior <- matrix(eachCovPosterior, 1, 1)
+      # get each prior covariance
+      eachCovPrior <- covPrior[i, ]
+      eachCovPrior <- eachCovPrior[i]
+      eachCovPrior <- matrix(eachCovPrior, 1, 1)
+      # Bayes Factor for each loading
+      set.seed(seed)
+      BF_item[i] <-
+        (
+          pmvnorm(
+            lower = eachLowerBound,
+            upper = eachUpperBound,
+            mean = eachMeanPosterior,
+            sigma = eachCovPosterior
+          )[1] * (
+            1 - pmvnorm(
+              lower = eachLowerBound,
+              upper = eachUpperBound,
+              mean = 0,
+              sigma = eachCovPrior
+            )[1]
+          )
+        ) /
+        (
+          pmvnorm(
+            lower = eachLowerBound,
+            upper = eachUpperBound,
+            mean = 0,
+            sigma = eachCovPrior
+          )[1] * (
+            1 - pmvnorm(
+              lower = eachLowerBound,
+              upper = eachUpperBound,
+              mean = eachMeanPosterior,
+              sigma = eachCovPosterior
+            )[1]
+          ) / (
+            1 - pmvnorm(
+              lower = eachLowerBound,
+              upper = eachUpperBound,
+              mean = 0,
+              sigma = eachCovPrior
+            )[1]
+          )
+        )
+      #BF_item[[i]] <- round(BF_item[[i]],3)
+      # name BF with the indicator's name
+      names(BF_item)[i] <- paste(indicatorName[i],  sep = "")
+    } # end for(i in 1:indicatorNum)
+    partBF <- BF
+    PartBF_item <- unlist(BF_item)
+    partIntG1 <- intG1
+    partIntG2 <- intG2
+    #Part7 : compute partial BF. If patial BF always < minBF,
+    #        the loop will exit with length(PartBF_item) == 1.
+    while (partBF < minBF & length(PartBF_item) != 1) {
+      ## recompute model
+      # get partial intercepts
+      partIntG1 <- partIntG1[-which.min(PartBF_item)]
+      partIntG2 <- partIntG2[-which.min(PartBF_item)]
+      # the number of the partial intercepts
+      partNum <- length(partIntG2)
+      # recompute factor's mean of group 1 and 2 that the sum of the partial intercepts per group = 0
+      partMeanG1 <- sum(partIntG1) / sum(loadG1)
+      partMeanG2 <- sum(partIntG2) / sum(loadG2)
+      # adjust factor's mean
+      adjustPartFactorM <- paste0('F', ' ~ ' , 'c(', partMeanG1, ',',
+                                  partMeanG2, ')* ', '1')
+      # set model for lavaan
+      adjustedModel <- c(Equation, adjustFactor, adjustPartFactorM)
+      # run lavaan again
+      lavPart <-
+        cfa(adjustedModel, dat, std.lv = TRUE, group = groupVariable)
+      ## get the adjusted intercepts
+      # get the adjusted estimates
+      estiPart <- parameterEstimates(lavPart)
+      # get the adjusted intercepts
+      partInt <- estiPart[estiPart$op == "~1", "est"]
+      # get the adjusted intercepts of group 1 and 2
+      AdjustedPartIntG1 <- partInt[1:indicatorNum]
+      AdjustedPartIntG2 <-
+        partInt[(indicatorNum + 2):(2 * indicatorNum + 1)]
+      ## get the upper bound
+      partUpperBound <- upperBound
+      ## get posterior and prior covariance
+      # get covariance of group 1 and 2
+      partCov1 <- lavInspect(lavPart, "vcov")[varName1, varName1]
+      partCov2 <- lavInspect(lavPart, "vcov")[varName2, varName2]
+      # posterior covariance
+      partCov <- as.matrix(bdiag(partCov1, partCov2))
+      partCovPosterior <- A %*% partCov %*% t(A)
+      # prior covariance
+      partCovPrior1 <- partCov1 / fraction_b[1]
+      partCovPrior2 <- partCov2 / fraction_b[2]
+      partCovPrior <-
+        as.matrix(bdiag(partCovPrior1, partCovPrior2))
+      partCovPrior <- A %*% partCovPrior %*% t(A)
+      ## get partial intercepts, upper bound, and prior and posterior covarance
+      PartBF_item2 <- unlist(BF_item)
+      # the number of the deleted loadings
+      DeletedNum <- indicatorNum - partNum
+      for (j in 1:DeletedNum) {
+        # the partial loadings of group 1 and 2
+        AdjustedPartIntG1 <-
+          AdjustedPartIntG1[-which.min(PartBF_item2)]
+        AdjustedPartIntG2 <-
+          AdjustedPartIntG2[-which.min(PartBF_item2)]
+        # the partial upper bound
+        partUpperBound <-
+          partUpperBound[-which.min(PartBF_item2)]
+        # the partial posterior covariance
+        partCovPosterior <-
+          partCovPosterior[-which.min(PartBF_item2), -which.min(PartBF_item2)]
+        # the partial prior covariance
+        partCovPrior <-
+          partCovPrior[-which.min(PartBF_item2), -which.min(PartBF_item2)]
+        # control this loop process
+        PartBF_item2 <- PartBF_item2[-which.min(PartBF_item2)]
+      }
+      # get partial posterior and prior means
+      partMeanPosterior <- AdjustedPartIntG1 - AdjustedPartIntG2
+      partMeanPrior <- rep(0, partNum)
+      #  get the partial lower bound
+      partLowerBound <- -partUpperBound
+      ## compute partial BF
+      set.seed(seed)
+      partBF <-
+        (
+          pmvnorm(
+            lower = partLowerBound,
+            upper = partUpperBound,
+            mean = partMeanPosterior,
+            sigma = partCovPosterior
+          )[1] * (
+            1 - pmvnorm(
+              lower = partLowerBound,
+              upper = partUpperBound,
+              mean = partMeanPrior,
+              sigma = partCovPrior
+            )[1]
+          )
+        ) /
+        (
+          pmvnorm(
+            lower = partLowerBound,
+            upper = partUpperBound,
+            mean = partMeanPrior,
+            sigma = partCovPrior
+          )[1] * (
+            1 - pmvnorm(
+              lower = partLowerBound,
+              upper = partUpperBound,
+              mean = partMeanPosterior,
+              sigma = partCovPosterior
+            )[1]
+          )
+        )
+      # control the loop process
+      PartBF_item <- PartBF_item[-which.min(PartBF_item)]
+    }#end while
+    ## arrange partial BF
+    partBF <- as.data.frame(partBF)
+    #partBF <- round(partBF,3)
+    colnames(partBF) <- 'partial'
+    # get deleted indicator
+    deletedIndicator <-
+      setdiff(names(BF_item), names(PartBF_item))
+    ## print BF of all intercepts, BF of each intercepts, BF of partial intercepts
+    ## arrange a table
+    BF_item <- as.data.frame(BF_item)
+    #BF_item <- round(BF_item,3)
+    out <- cbind(BF, partBF, BF_item)
+    # CJ: Do not print in this function
+    return(out)
+  }# end if (BF < minBF)
 }
 
 #' @method print bayesian_invariance
 #' @export
-print.bayesian_invariance <- function(x, ...){
+print.bayesian_invariance <- function(x, ...) {
   # CJ: DO all of the printing here
 
   # judge partial BF > minBF or not
-  if(partBF >= minBF) {
-    cat("\n With the minimum Bayes factor >=",minBF,",","partial approximate scalar invariance is supproted.
-        \n The following indicators are free :\n",paste0(deletedIndicator,collapse = " , "),"\n\n")
+  if (partBF >= minBF) {
+    cat(
+      "\n With the minimum Bayes factor >=",
+      minBF,
+      ",",
+      "partial approximate scalar invariance is supproted.
+        \n The following indicators are free :\n",
+      paste0(deletedIndicator, collapse = " , "),
+      "\n\n"
+    )
   } else {
     # if partial BF < minBF, partial BF do not exist.
     partBF <- 'null'
-    cat("\n With the minimum Bayes factor >=", minBF, ", intercepts are not
-          \n about equal across group, respectively.Please check your model or minBF! \n\n")
+    cat(
+      "\n With the minimum Bayes factor >=",
+      minBF,
+      ", intercepts are not
+          \n about equal across group, respectively.Please check your model or minBF! \n\n"
+    )
   }
 }
 
-get_bounds <- function(x, var_by_group, tolerance){
+get_bounds <- function(x, var_by_group, tolerance) {
   # get the covariance of the observed variables
   covx <- lavInspect(x, what = "cov.ov")
   # The max value of the loadings in group 1 and 2
-  loadmax_grp <- sapply(seq_along(covx), function(i){
-    sqrt(diag(covx[[i]])/var_by_group[i])
+  loadmax_grp <- sapply(seq_along(covx), function(i) {
+    sqrt(diag(covx[[i]]) / var_by_group[i])
   })
   # the upper and lower bounds
   upperBound <- loadmax_grp[, 1]
-  upperBound[loadmax_grp[, 1] > loadmax_grp[, 2]] <- loadmax_grp[, 2][loadmax_grp[, 1] > loadmax_grp[, 2]]
+  upperBound[loadmax_grp[, 1] > loadmax_grp[, 2]] <-
+    loadmax_grp[, 2][loadmax_grp[, 1] > loadmax_grp[, 2]]
   upperBound <- tolerance * upperBound
   lowerBound <- -1 * upperBound
   list(lowerBound = lowerBound, upperBound = upperBound)
 }
 
-calc_bf_mi <- function(lower, upper, mprior, mpost, sprior, spost){
-  pmvpost <- pmvnorm(lower=lower, upper = upper, mean=mpost, sigma=spost)
-  pmvprior <- pmvnorm(lower=lower, upper = upper, mean=mprior, sigma=sprior)
-  (pmvpost * (1- pmvprior))/ (pmvprior*(1- pmvpost))
+calc_bf_mi <- function(lower, upper, mprior, mpost, sprior, spost) {
+  pmvpost <-
+    pmvnorm(
+      lower = lower,
+      upper = upper,
+      mean = mpost,
+      sigma = spost
+    )
+  pmvprior <-
+    pmvnorm(
+      lower = lower,
+      upper = upper,
+      mean = mprior,
+      sigma = sprior
+    )
+  (pmvpost * (1 - pmvprior)) / (pmvprior * (1 - pmvpost))
 }
 
-get_lav_data <- function(x, ...){
+get_lav_data <- function(x, ...) {
   dat <- lavInspect(object = x, what = "data")
-  if(inherits(dat, "list")){
-    if(length(dat) > 1){
+  if (inherits(dat, "list")) {
+    if (length(dat) > 1) {
       grp <- lavInspect(object = x, what = "group")
       grp_levels <- lavInspect(object = x, what = "group.label")
-      dat <- do.call(rbind, lapply(seq_along(grp_levels), function(i){
-        out <- as.data.frame(dat[[i]])
-        out[[grp]] <- grp_levels[i]
-        out
-      }))
+      dat <-
+        do.call(rbind, lapply(seq_along(grp_levels), function(i) {
+          out <- as.data.frame(dat[[i]])
+          out[[grp]] <- grp_levels[i]
+          out
+        }))
     } else {
       dat <- dat[[1]]
     }
@@ -572,9 +738,9 @@ get_lav_data <- function(x, ...){
   dat
 }
 
-get_loadings_by_group <- function(x){
+get_loadings_by_group <- function(x) {
   ests <- lavaan::inspect(x, what = "est")
-  if(!is.null(ests[["lambda"]])){
+  if (!is.null(ests[["lambda"]])) {
     return(matrix(ests[["lambda"]], ncol = 1))
   } else {
     groupnames <- names(ests)
@@ -584,20 +750,27 @@ get_loadings_by_group <- function(x){
   }
 }
 
-get_var_by_group <- function(x){
+get_var_by_group <- function(x, items = NULL) {
   loadings <- get_loadings_by_group(x)
-  var_by_group <- apply(loadings, 2, function(i){
-    (prod(i)**(1/nrow(loadings)))**2
+  if (is.null(items))
+    items <- rownames(loadings)
+  loadings <-
+    loadings[rownames(loadings) %in% items, , drop = FALSE]
+  apply(loadings, 2, function(i) {
+    (prod(i) ** (1 / nrow(loadings))) ** 2
   })
 }
 
-lav_drop_item <- function(x, item){
+lav_drop_item <- function(x, item) {
   thepars <- partable(x)
-  thepars <- thepars[!(thepars$lhs == item | thepars$rhs == item), c("lhs", "op", "rhs", "group", "free", "ustart")]
+  thepars <-
+    thepars[!(thepars$lhs == item |
+                thepars$rhs == item), c("lhs", "op", "rhs", "group", "free", "ustart")]
   lavaan::update(x, model = thepars)
 }
 
-lav_fix_var <- function(partab, var_by_group){
+lav_fix_var <- function(x, var_by_group) {
+  partab <- lavaan::partable(x)
   lv_nam <- lavaan::lavNames(partab, type = "lv")
   add_this <- data.frame(
     lhs = lv_nam,
@@ -607,20 +780,35 @@ lav_fix_var <- function(partab, var_by_group){
     free = 0,
     ustart = var_by_group
   )
-  suppressWarnings(lav_partable_merge(partab,
-                     add_this,
-                     remove.duplicated = TRUE, fromLast = TRUE)[, c("lhs", "op", "rhs", "group", "free",
-                                                                    "ustart")])
+  new_partab <- suppressWarnings(lav_partable_merge(
+    partab,
+    add_this,
+    remove.duplicated = TRUE,
+    fromLast = TRUE
+  )[, c("lhs", "op", "rhs", "group", "free",
+        "ustart")])
+  lavaan::update(x, model = new_partab)
 }
 
 # section 1: example
 # CFA model
 model22 <- 'A  =~ Ab + Al + Af + An + Ar + Ac'
 # Fit the multiple group latent regression model
-lavout <- cfa(model22, data = sesamesim, std.lv = TRUE, group = "sex")
+lavout <-
+  cfa(model22,
+      data = sesamesim,
+      std.lv = TRUE,
+      group = "sex")
 # approximate metric invariance
 set.seed(2020)
-result1 <- bmi(lavout,type = 'metric', minBF = 120, tolerance = 0.2,fraction=2)
+result1 <-
+  bmi(
+    lavout,
+    type = 'metric',
+    minBF = 120,
+    tolerance = 0.2,
+    fraction = 2
+  )
 # partial approximate metric invariance
 # result2 <- BMI1(lavout,type = 'metric',data = sesamesim, tolerance = 0.2,minBF = 65,times=2)
 # # approximate scalar invariance
