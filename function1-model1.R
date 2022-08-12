@@ -85,6 +85,7 @@ bmi.lavaan <- function(x, type = "metric", tolerance = .2, minBF = 3, fraction =
 
 # CJ: You still have to pass the correct arguments here
 bmi_metric <- function(...){
+  browser()
   cl <- match.call()
   dots <- list(...)
   suppressMessages(attach(dots))
@@ -128,7 +129,7 @@ bmi_metric <- function(...){
   vcovmat <- lavInspect(lavAdjusted, "vcov")
   is_loading <- grepl("=~", row.names(vcovmat))
   covariance <- vcovmat[is_loading, is_loading]
-  # CJ: WHat is A?
+  # CJ: A helps us get the covariance of the difference between indicators
   A <- cbind(diag(indicatorNum), -1 * diag(indicatorNum))
   covPosterior<- A %*% covariance %*% t(A)
 
@@ -145,7 +146,7 @@ bmi_metric <- function(...){
   if(is.nan(BF)){ # SHould these be error messages instead?
     message('Approximate metric invariance : Bayes factor cannot be computed. \n\n')
   }
-
+  # Run a test: Make the BF NaN, and see if the rest of the function works
   BF_item <- sapply(seq(indicatorNum), function(i){
     calc_bf_mi(lower = bounds[["lowerBound"]][i],
                upper = bounds[["upperBound"]][i],
@@ -586,7 +587,7 @@ get_loadings_by_group <- function(x){
 get_var_by_group <- function(x){
   loadings <- get_loadings_by_group(x)
   var_by_group <- apply(loadings, 2, function(i){
-    (prod(i)**(1/indicatorNum))**2
+    (prod(i)**(1/nrow(loadings)))**2
   })
 }
 
@@ -619,7 +620,7 @@ model22 <- 'A  =~ Ab + Al + Af + An + Ar + Ac'
 lavout <- cfa(model22, data = sesamesim, std.lv = TRUE, group = "sex")
 # approximate metric invariance
 set.seed(2020)
-result1 <- bmi(lavout,type = 'metric', minBF = 70, tolerance = 0.2,fraction=2)
+result1 <- bmi(lavout,type = 'metric', minBF = 120, tolerance = 0.2,fraction=2)
 # partial approximate metric invariance
 # result2 <- BMI1(lavout,type = 'metric',data = sesamesim, tolerance = 0.2,minBF = 65,times=2)
 # # approximate scalar invariance
