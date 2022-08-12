@@ -95,7 +95,6 @@ bmi.lavaan <-
 
 # CJ: You still have to pass the correct arguments here
 bmi_metric <- function(...) {
-  browser()
   cl <- match.call()
   dots <- list(...)
   suppressMessages(attach(dots))
@@ -126,18 +125,14 @@ bmi_metric <- function(...) {
   #Part2: recreate the model in lavaan to align the loadings
   # compute the factor's variance of group 1 and 2 that the product of loadings per group = 1
   # run lavaan again
-  loadings_original <- get_loadings_by_group(x)
-  var_by_group <- get_var_by_group(x)
-  browser()
-  BFs <- bf_mi(x, var_by_group, fraction_b = fraction_b, tolerance = tolerance)
-  BF <- BFs$BF
-  BF_item <- BFs$BF_item
+  BFs <- bf_mi(x, items = the_items, fraction_b = fraction_b, tolerance = tolerance, by_item = TRUE)
+  suppressMessages(attach(BFs))
   if (BF < minBF) {
-    drop_in_order <- the_items[order(BF_item, decreasing = TRUE)]
-    BF_drop <- sapply((length(drop_in_order) - 1):1, function(i) {
-      var_by_group_item <- get_var_by_group(x, items = head(drop_in_order, i))
+    drop_in_order <- the_items[order(BF_item, decreasing = FALSE)]
+    BF_drop <- sapply(1:(length(drop_in_order)-1), function(i) {
       # Recalculate the Bayes factor, dropping an increasing number of items
-      bf_mi(x, var_by_group_item, fraction_b = fraction_b, tolerance = tolerance)
+      update_items <- the_items[!the_items %in% drop_in_order[1:i]]
+      bf_mi(x, items = update_items, fraction_b = fraction_b, tolerance = tolerance)[["BF"]]
     })
   }
   out <- list(BF = BF, BF_item = BF_item, BF_drop = BF_drop)
@@ -146,27 +141,29 @@ bmi_metric <- function(...) {
   return(out)
 }
 
-bf_mi <- function(x, var_by_group, fraction_b, tolerance) {
-  browser()
+bf_mi <- function(x, items, fraction_b, tolerance, by_item = FALSE) {
+  # Prepare output object
+  out <- list(BF = NULL, BF_item = NULL)
+  loadings_original <- get_loadings_by_group(x)
+  var_by_group <- get_var_by_group(x, items = items)
   lavAdjusted <- lav_fix_var(x, var_by_group)
   #Part3: get the adjusted loadings, that is, comparable loadings
   # get the adjusted loadings
-  loadings_adjusted <- get_loadings_by_group(lavAdjusted)
+  loadings_adjusted <- get_loadings_by_group(lavAdjusted, items = items)
   indicatorNum <- nrow(loadings_adjusted)
   # get the posterior and prior means
-  # CJ: What's the logic of doing group 1 minus group 2?
+  # CJ: The mean of the posterior is the difference between the two group loadings
   meanPosterior <- loadings_adjusted[, 1] - loadings_adjusted[, 2]
   meanPrior <- rep(0, indicatorNum)
   #Part4: get upper and lower bounds
-  bounds <- get_bounds(lavAdjusted, var_by_group, tolerance)
-
+  bounds <- get_bounds(lavAdjusted, items = items, var_by_group, tolerance)
 
   #Part5: get posterior and prior covariance
   # get covariance of group 1 and 2
   # get posterior covariance
   vcovmat <- lavInspect(lavAdjusted, "vcov")
-  is_loading <- grepl("=~", row.names(vcovmat))
-  covariance <- vcovmat[is_loading, is_loading]
+  these_loadings <- grepl("=~", row.names(vcovmat), fixed = TRUE) &  grepl(paste0("(", paste0(items, collapse = "|"), ")"), row.names(vcovmat))
+  covariance <- vcovmat[these_loadings, these_loadings, drop = FALSE]
   # CJ: A helps us get the covariance of the difference between indicators
   A <- cbind(diag(indicatorNum),-1 * diag(indicatorNum))
   covPosterior <- A %*% covariance %*% t(A)
@@ -184,7 +181,7 @@ bf_mi <- function(x, var_by_group, fraction_b, tolerance) {
   covPrior[is.nan(covPrior)] <- 0
   covPrior <- A %*% covPrior %*% t(A)
 
-  BF <-
+  out$BF <-
     calc_bf_mi(
       lower = bounds[["lowerBound"]],
       upper = bounds[["upperBound"]],
@@ -193,22 +190,24 @@ bf_mi <- function(x, var_by_group, fraction_b, tolerance) {
       sprior = covPrior,
       spost = covPosterior
     )
-  if (is.nan(BF)) {
+  if (is.nan(out$BF)) {
     # SHould these be error messages instead?
     message('Approximate metric invariance : Bayes factor cannot be computed. \n\n')
   }
   # Run a test: Make the BF NaN, and see if the rest of the function works
-  BF_item <- sapply(seq(indicatorNum), function(i) {
-    calc_bf_mi(
-      lower = bounds[["lowerBound"]][i],
-      upper = bounds[["upperBound"]][i],
-      mprior = 0,
-      mpost = meanPosterior[i],
-      sprior = covPrior[i, i, drop = FALSE],
-      spost = covPosterior[i, i, drop = FALSE]
-    )
-  })
-  return(list(BF = BF, BF_item = BF_item))
+  if(by_item){
+    out$BF_item <- sapply(seq(indicatorNum), function(i) {
+      calc_bf_mi(
+        lower = bounds[["lowerBound"]][i],
+        upper = bounds[["upperBound"]][i],
+        mprior = 0,
+        mpost = meanPosterior[i],
+        sprior = covPrior[i, i, drop = FALSE],
+        spost = covPosterior[i, i, drop = FALSE]
+      )
+    })
+  }
+  return(out)
 }
 
 #
@@ -685,13 +684,15 @@ print.bayesian_invariance <- function(x, ...) {
   }
 }
 
-get_bounds <- function(x, var_by_group, tolerance) {
+get_bounds <- function(x, items = NULL, var_by_group, tolerance) {
   # get the covariance of the observed variables
   covx <- lavInspect(x, what = "cov.ov")
+  if(!is.null(items)) covx <- lapply(covx, function(thiscov){thiscov[items, items, drop = FALSE]})
   # The max value of the loadings in group 1 and 2
-  loadmax_grp <- sapply(seq_along(covx), function(i) {
+  loadmax_grp <- do.call(cbind, lapply(seq_along(covx), function(i) {
     sqrt(diag(covx[[i]]) / var_by_group[i])
-  })
+  }))
+  colnames(loadmax_grp) <- names(covx)
   # the upper and lower bounds
   upperBound <- loadmax_grp[, 1]
   upperBound[loadmax_grp[, 1] > loadmax_grp[, 2]] <-
@@ -738,16 +739,17 @@ get_lav_data <- function(x, ...) {
   dat
 }
 
-get_loadings_by_group <- function(x) {
+get_loadings_by_group <- function(x, items = NULL) {
   ests <- lavaan::inspect(x, what = "est")
   if (!is.null(ests[["lambda"]])) {
-    return(matrix(ests[["lambda"]], ncol = 1))
+    out <- matrix(ests[["lambda"]], ncol = 1)
   } else {
     groupnames <- names(ests)
     out <- do.call(cbind, lapply(ests, `[[`, "lambda"))
     colnames(out) <- groupnames
-    return(out)
   }
+  if(!is.null(items)) out <- out[items, , drop = FALSE]
+  return(out)
 }
 
 get_var_by_group <- function(x, items = NULL) {
