@@ -126,14 +126,29 @@ bmi_metric <- function(...) {
   #Part2: recreate the model in lavaan to align the loadings
   # compute the factor's variance of group 1 and 2 that the product of loadings per group = 1
   # run lavaan again
-  BFs <- bf_mi(x, items = the_items, fraction_b = fraction_b, tolerance = tolerance, by_item = TRUE)
-  suppressMessages(attach(BFs))
+  BF_Args <- prepare_bf_args(x, items = the_items, fraction_b = fraction_b, tolerance = tolerance)
+  # BF <-
+
+  BF <- do.call(calc_bf_mi, BF_Args)
+
+  BF_item <- sapply(seq(indicatorNum), function(i) {
+      calc_bf_mi(
+        lower = BF_Args$lower[i],
+        upper = BF_Args$upper[i],
+        mprior = 0,
+        mpost = BF_Args$mpost[i],
+        sprior = BF_Args$spost[i, i, drop = FALSE],
+        spost = BF_Args$sprior[i, i, drop = FALSE]
+      )
+    })
+  BF_drop <- NULL
   if (BF < minBF) {
     drop_in_order <- the_items[order(BF_item, decreasing = FALSE)]
     BF_drop <- sapply(1:(length(drop_in_order)-1), function(i) {
       # Recalculate the Bayes factor, dropping an increasing number of items
       update_items <- the_items[!the_items %in% drop_in_order[1:i]]
-      bf_mi(x, items = update_items, fraction_b = fraction_b, tolerance = tolerance)[["BF"]]
+      BF_Args <- prepare_bf_args(x, items = update_items, fraction_b = fraction_b, tolerance = tolerance)
+      do.call(calc_bf_mi, BF_Args)
     })
   }
   out <- list(BF = BF, BF_item = BF_item, BF_drop = BF_drop)
@@ -142,9 +157,7 @@ bmi_metric <- function(...) {
   return(out)
 }
 
-bf_mi <- function(x, items, fraction_b, tolerance, by_item = FALSE) {
-  # Prepare output object
-  out <- list(BF = NULL, BF_item = NULL)
+prepare_bf_args <- function(x, items, fraction_b, tolerance) {
   loadings_original <- get_loadings_by_group(x)
   var_by_group <- get_var_by_group(x, items = items)
   lavAdjusted <- lav_fix_var(x, var_by_group)
@@ -179,34 +192,12 @@ bf_mi <- function(x, items, fraction_b, tolerance, by_item = FALSE) {
   # Set NaNs to zero (divided by zero)
   covPrior[is.nan(covPrior)] <- 0
   covPrior <- A %*% covPrior %*% t(A)
-
-  out$BF <-
-    calc_bf_mi(
-      lower = bounds[["lowerBound"]],
-      upper = bounds[["upperBound"]],
-      mprior = meanPrior,
-      mpost = meanPosterior,
-      sprior = covPrior,
-      spost = covPosterior
-    )
-  if (is.nan(out$BF)) {
-    # SHould these be error messages instead?
-    message('Approximate metric invariance : Bayes factor cannot be computed. \n\n')
-  }
-  # Run a test: Make the BF NaN, and see if the rest of the function works
-  if(by_item){
-    out$BF_item <- sapply(seq(indicatorNum), function(i) {
-      calc_bf_mi(
-        lower = bounds[["lowerBound"]][i],
-        upper = bounds[["upperBound"]][i],
-        mprior = 0,
-        mpost = meanPosterior[i],
-        sprior = covPrior[i, i, drop = FALSE],
-        spost = covPosterior[i, i, drop = FALSE]
-      )
-    })
-  }
-  return(out)
+  return(list(lower = bounds[["lowerBound"]],
+              upper = bounds[["upperBound"]],
+              mprior = meanPrior,
+              mpost = meanPosterior,
+              sprior = covPrior,
+              spost = covPosterior))
 }
 
 #
@@ -716,7 +707,13 @@ calc_bf_mi <- function(lower, upper, mprior, mpost, sprior, spost) {
       mean = mprior,
       sigma = sprior
     )
-  (pmvpost * (1 - pmvprior)) / (pmvprior * (1 - pmvpost))
+  BF <- (pmvpost * (1 - pmvprior)) / (pmvprior * (1 - pmvpost))
+  if (is.nan(BF)) {
+    # SHould these be error messages instead?
+    message('Approximate metric invariance : Bayes factor cannot be computed. \n\n')
+  }
+  # Run a test: Make the BF NaN, and see if the rest of the function works
+  return(BF)
 }
 
 get_lav_data <- function(x, ...) {
