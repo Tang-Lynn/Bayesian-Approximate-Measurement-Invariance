@@ -1,8 +1,3 @@
-# CJ: Please read the tidyverse style guide for R code;
-# CJ: for example, there should always be a space between comma's and mathematical operators,
-# CJ: variable names should be snake_case not camelCase, and function names should be verbs when possible
-# CJ: https://style.tidyverse.org/syntax.html
-# testing
 library(lavaan)  # CFA model
 library(bain) # example from this package
 library(psych)    # Descriptives
@@ -85,7 +80,6 @@ bmi.lavaan <-
     # Capture function call
     cl <- match.call()
     # Add arguments
-    #Part1: prepare for recomputing the model
     # Replace function call with internal mi function
     cl[[1L]] <- str2lang(paste0("bmi_", type))
     # Evaluate MI
@@ -123,7 +117,6 @@ bmi_metric <- function(...) {
   # fraction b
   fraction_b <-
     fraction * (indicatorNum + 1) / (2 * lavInspect(x, what = "nobs"))
-  #Part2: recreate the model in lavaan to align the loadings
   # compute the factor's variance of group 1 and 2 that the product of loadings per group = 1
   # run lavaan again
   BFs <- bf_mi(x, items = the_items, fraction_b = fraction_b, tolerance = tolerance, by_item = TRUE)
@@ -659,7 +652,6 @@ bmi_scalar <- function(...) {
 #' @export
 print.bayesian_invariance <- function(x, ...) {
   # CJ: DO all of the printing here
-
   # judge partial BF > minBF or not
   if (partBF >= minBF) {
     cat(
