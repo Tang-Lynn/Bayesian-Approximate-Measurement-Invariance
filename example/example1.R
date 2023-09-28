@@ -1,6 +1,6 @@
 library(bain)
 library(lavaan)
-read.csv(example_data1,header = T)
+read.csv('example_data1.csv',header = T)
 # Italians
 Italians <- example_data1[1:313,]
 # Colombians
