@@ -13,7 +13,7 @@ model <- 'A  =~ Item1 + Item2 + Item3 + Item4 + Item5 + Item6 + Item7 + Item8 +
 # computing the model
 x <- cfa(model, data = example_data1, std.lv = TRUE, group = "COUNTRY")
 # fit indexes
-fit<- fitmeasures(lavout,c("chisq", "df",
+fit<- fitmeasures(x,c("chisq", "df",
                              "pvalue", "cfi", "rmsea","srmr","BIC"),output = "matrix")
 fit
 # estimated parameters
